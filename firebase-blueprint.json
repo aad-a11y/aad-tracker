@@ -1,0 +1,119 @@
+{
+  "entities": {
+    "user": {
+      "title": "User Profile",
+      "description": "User account information and metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "lastLogin": { "type": "string", "format": "date-time" },
+        "zipCode": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "travelers": {
+          "type": "object",
+          "properties": {
+            "adults": { "type": "number" },
+            "infantsOnLap": { "type": "number" },
+            "infantsWithSeat": { "type": "number" },
+            "children": { "type": "number" },
+            "youths": { "type": "number" }
+          }
+        },
+        "rankedVacationGoals": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["uid", "email"]
+    },
+    "account": {
+      "title": "Bank Account",
+      "description": "A tracked bank account bonus",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "bankName": { "type": "string" },
+        "accountName": { "type": "string" },
+        "accountType": { "type": "string" },
+        "openingDate": { "type": "string" },
+        "bonusAmount": { "type": "number" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "bankName", "accountName", "accountType", "openingDate", "bonusAmount", "status"]
+    },
+    "rule": {
+      "title": "Bank Re-Eligibility Rule",
+      "description": "A rule determining cooling off periods",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "bankName": { "type": "string" },
+        "coolingOffPeriodMonths": { "type": "number" },
+        "clockStartsFrom": { "type": "string" },
+        "scope": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "bankName", "coolingOffPeriodMonths", "clockStartsFrom", "scope"]
+    },
+    "vacationGoal": {
+      "title": "Vacation Goal",
+      "description": "A vacation goal travel destination with points/cash targets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "destination": { "type": "string" },
+        "category": { "type": "string" },
+        "targetDate": { "type": "string" },
+        "estimatedCashCost": { "type": "number" },
+        "estimatedPointsCost": { "type": "number" },
+        "currentPointsSaved": { "type": "number" },
+        "currentCashSaved": { "type": "number" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "flightsBooked": { "type": "boolean" },
+        "hotelsBooked": { "type": "boolean" }
+      },
+      "required": ["id", "destination", "category", "targetDate", "estimatedCashCost", "estimatedPointsCost", "currentPointsSaved", "currentCashSaved", "status", "flightsBooked", "hotelsBooked"]
+    },
+    "loyaltyBalance": {
+      "title": "Loyalty Program Balance",
+      "description": "Points/miles balance for a specific airline, hotel or credit card program",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "programName": { "type": "string" },
+        "programType": { "type": "string" },
+        "balance": { "type": "number" },
+        "estimatedValuePerPoint": { "type": "number" }
+      },
+      "required": ["id", "programName", "programType", "balance", "estimatedValuePerPoint"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "User profile records"
+    },
+    "/users/{userId}/accounts/{accountId}": {
+      "schema": "account",
+      "description": "The user's tracked bank accounts"
+    },
+    "/users/{userId}/rules/{ruleId}": {
+      "schema": "rule",
+      "description": "The user's custom bank rules"
+    },
+    "/users/{userId}/vacationGoals/{goalId}": {
+      "schema": "vacationGoal",
+      "description": "The user's vacation goals"
+    },
+    "/users/{userId}/loyaltyBalances/{balanceId}": {
+      "schema": "loyaltyBalance",
+      "description": "The user's loyalty program balances"
+    }
+  }
+}

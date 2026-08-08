@@ -1,0 +1,6 @@
+{
+  "name": "AAD Tracker",
+  "description": "Track bank account sign-up bonuses, qualifying requirements, re-eligibility cooling-off rules, and critical deadlines to maximize cash back earnings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
