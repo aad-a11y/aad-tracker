@@ -96,7 +96,11 @@ export default function Dashboard({
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP error! Status: ${response.status}`);
+        setShowRawText(true);
+        if (response.status === 404) {
+          throw new Error(errData.error || 'Chase / Bank anti-bot security blocks automated link reading (404/403). Please paste the promotional terms or fine print text into the box below and AI will extract it immediately!');
+        }
+        throw new Error(errData.error || `Failed to read link content (Status: ${response.status}). Please paste the promotional terms below.`);
       }
 
       const result = await response.json();

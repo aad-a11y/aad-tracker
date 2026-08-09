@@ -76,7 +76,11 @@ export default function AccountModal({ onClose, onSave, accountToEdit, initialPr
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP error! Status: ${response.status}`);
+        setShowRawTextInput(true);
+        if (response.status === 404) {
+          throw new Error(errData.error || 'Chase / Bank anti-bot security blocks automated link reading (404/403). Please paste the promotional terms or fine print text below!');
+        }
+        throw new Error(errData.error || `Failed to read link content (Status: ${response.status}). Please paste the promotional terms below.`);
       }
 
       setAiStatus('Auditing fine prints & extracting requirements...');

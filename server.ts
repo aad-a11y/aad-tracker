@@ -27,39 +27,75 @@ app.post('/api/extract-rules', async (req, res) => {
   if (url) {
     try {
       console.log(`[AI Solver] Attempting to fetch URL: ${url}`);
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-        },
-        redirect: 'follow',
-      });
+      let html = '';
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+      // Strategy 1: Direct fetch with browser User-Agent
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+          redirect: 'follow',
+        });
+        if (response.ok) {
+          html = await response.text();
+        }
+      } catch (directErr: any) {
+        console.warn(`[AI Solver] Direct fetch failed for ${url}:`, directErr.message);
       }
 
-      let html = await response.text();
-      // Sanitize heavy tags to preserve context window tokens
-      html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-      html = html.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-      html = html.replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '');
-      const textContent = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      // Strategy 2: Proxy via allorigins if direct fetch returned empty/non-200
+      if (!html || html.length < 200) {
+        try {
+          console.log(`[AI Solver] Trying AllOrigins proxy for ${url}...`);
+          const proxyRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
+          if (proxyRes.ok) {
+            html = await proxyRes.text();
+          }
+        } catch (pErr: any) {
+          console.warn(`[AI Solver] Proxy fetch failed:`, pErr.message);
+        }
+      }
 
-      if (textContent.length > 100) {
-        textToAnalyze = `Source URL: ${url}\n\nWebpage content:\n${textContent}\n\n${rawText ? 'Additional pasted details:\n' + rawText : ''}`;
-        fetchedUrlSuccess = true;
-        console.log('[AI Solver] URL fetched and sanitized successfully');
+      // Strategy 3: CorsProxy fallback
+      if (!html || html.length < 200) {
+        try {
+          console.log(`[AI Solver] Trying CorsProxy fallback for ${url}...`);
+          const proxyRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
+          if (proxyRes.ok) {
+            html = await proxyRes.text();
+          }
+        } catch (pErr: any) {
+          console.warn(`[AI Solver] CorsProxy fetch failed:`, pErr.message);
+        }
+      }
+
+      if (html && html.length > 200) {
+        // Sanitize heavy tags to preserve context window tokens
+        const sanitized = html
+          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+          .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+          .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '');
+        const textContent = sanitized.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+        if (textContent.length > 100) {
+          textToAnalyze = `Source URL: ${url}\n\nWebpage content:\n${textContent}\n\n${rawText ? 'Additional pasted details:\n' + rawText : ''}`;
+          fetchedUrlSuccess = true;
+          console.log('[AI Solver] URL fetched and sanitized successfully');
+        } else {
+          throw new Error('Webpage returned insufficient readable text.');
+        }
       } else {
-        throw new Error('Webpage returned insufficient text content.');
+        throw new Error('Bank anti-bot security blocked automated link scanning for this page (Chase/Bank bot restriction).');
       }
     } catch (err: any) {
       console.error(`[AI Solver] Failed to fetch URL ${url}:`, err.message);
       fetchErrorMsg = err.message;
       if (!rawText) {
         return res.status(422).json({
-          error: 'Could not automatically retrieve webpage content.',
+          error: 'Bank anti-bot security blocked automated link scanning for this page. Please click "Paste Fine Print Text" above, copy & paste the promotional details directly, and AI will extract everything instantly!',
           details: err.message,
           fallbackRequired: true
         });
