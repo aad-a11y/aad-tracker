@@ -1,75 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
 
-async function fetchUrlContent(url) {
-  const fetchHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-  };
-
-  // Strategy 1: Jina AI Reader (Fast 3.5s timeout)
-  try {
-    const res = await fetch(`https://r.jina.ai/${url}`, {
-      signal: AbortSignal.timeout(3500),
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/plain,text/html,application/json'
-      }
-    });
-    if (res.ok) {
-      const text = await res.text();
-      if (text && text.length > 200 && !text.includes('Target URL returned 403') && !text.includes('Access Denied')) {
-        return text;
-      }
-    }
-  } catch (e) {
-    console.warn('Jina AI reader failed:', e.message);
-  }
-
-  // Strategy 2: Direct fetch (3s timeout)
-  try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(3000),
-      headers: fetchHeaders,
-      redirect: 'follow'
-    });
-    if (res.ok) {
-      const text = await res.text();
-      if (text && text.length > 200) return text;
-    }
-  } catch (e) {
-    console.warn('Direct fetch failed:', e.message);
-  }
-
-  // Strategy 3: AllOrigins proxy (2.5s timeout)
-  try {
-    const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, {
-      signal: AbortSignal.timeout(2500)
-    });
-    if (res.ok) {
-      const text = await res.text();
-      if (text && text.length > 200) return text;
-    }
-  } catch (e) {
-    console.warn('AllOrigins proxy failed:', e.message);
-  }
-
-  // Strategy 4: CorsProxy (2.5s timeout)
-  try {
-    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, {
-      signal: AbortSignal.timeout(2500)
-    });
-    if (res.ok) {
-      const text = await res.text();
-      if (text && text.length > 200) return text;
-    }
-  } catch (e) {
-    console.warn('CorsProxy failed:', e.message);
-  }
-
-  return null;
-}
-
 export default async (req) => {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
@@ -80,40 +10,13 @@ export default async (req) => {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const { url, rawText } = body;
+    const { fileBase64, pdfBase64, fileMimeType, fileName, rawText } = body;
 
-    if (!url && !rawText) {
-      return new Response(JSON.stringify({ error: 'Please provide either a URL or raw fine print text.' }), {
+    const activeFileBase64 = fileBase64 || pdfBase64;
+
+    if (!activeFileBase64 && (!rawText || !rawText.trim())) {
+      return new Response(JSON.stringify({ error: 'Please upload an offer document (PDF or Image) or paste fine print text to analyze.' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    let textToAnalyze = rawText || '';
-    let fetchedUrlSuccess = false;
-
-    if (url) {
-      const html = await fetchUrlContent(url);
-      if (html) {
-        const sanitized = html
-          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-          .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-          .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '');
-        const textContent = sanitized.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-
-        if (textContent.length > 100) {
-          textToAnalyze = `Source URL: ${url}\n\nWebpage content:\n${textContent}\n\n${rawText ? 'Additional details:\n' + rawText : ''}`;
-          fetchedUrlSuccess = true;
-        }
-      }
-    }
-
-    if (!textToAnalyze) {
-      return new Response(JSON.stringify({
-        error: 'Bank anti-bot security blocked automated link scanning for this page (Chase/Bank bot restriction). Please click "Paste Fine Print Text" above, copy & paste the promotional details directly, and AI will extract everything instantly!',
-        fallbackRequired: true
-      }), {
-        status: 422,
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -129,8 +32,8 @@ export default async (req) => {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const systemInstruction = `You are an expert bank promotion auditor. Your job is to extract bank sign-up offer terms and qualifying rules from fine prints, disclosures, and offer pages.
-Carefully analyze the provided text and identify:
+    const systemInstruction = `You are an expert bank promotion auditor. Your job is to extract bank sign-up offer terms and qualifying rules from fine prints, disclosures, offer pages, or uploaded PDF/Image documents.
+Carefully analyze the provided document or text and identify:
 1. Bank Institution Name.
 2. The specific Account Product Name.
 3. The Account Type (must map to checking, savings, business_checking, business_savings, credit_card, or other).
@@ -147,9 +50,27 @@ For each requirement, determine:
 
 Return the response strictly as valid JSON matching the requested schema.`;
 
+    let contentsPayload;
+    if (activeFileBase64) {
+      const cleanData = activeFileBase64.replace(/^data:[^;]+;base64,/, '');
+      const mimeType = fileMimeType || (activeFileBase64.startsWith('data:image/') ? activeFileBase64.split(';')[0].replace('data:', '') : 'application/pdf');
+
+      contentsPayload = [
+        {
+          inlineData: {
+            mimeType,
+            data: cleanData
+          }
+        },
+        `Analyze this bank promotional offer document/image and extract the bank institution name, account product name, account type, cash bonus amount, promo code, and all qualification requirements (milestones, deadlines, deposit amounts) strictly according to system instructions. ${rawText ? '\nAdditional user text notes: ' + rawText : ''}`
+      ];
+    } else {
+      contentsPayload = rawText;
+    }
+
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: textToAnalyze,
+      contents: contentsPayload,
       config: {
         systemInstruction,
         responseMimeType: "application/json",
@@ -191,7 +112,6 @@ Return the response strictly as valid JSON matching the requested schema.`;
 
     return new Response(JSON.stringify({
       success: true,
-      fetchedUrlSuccess,
       data
     }), {
       status: 200,

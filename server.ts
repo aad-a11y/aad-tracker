@@ -8,117 +8,18 @@ dotenv.config();
 
 // Initialize Express
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 
 const PORT = Number(process.env.PORT) || 3000;
 
-// API Route: Extract Rules from Offer URL or pasted Fine Print text
+// API Route: Extract Rules from uploaded PDF/Image or pasted Fine Print text
 app.post('/api/extract-rules', async (req, res) => {
-  const { url, rawText } = req.body;
+  const { fileBase64, pdfBase64, fileMimeType, fileName, rawText } = req.body;
 
-  if (!url && !rawText) {
-    return res.status(400).json({ error: 'Please provide either a URL or raw fine print text to analyze.' });
-  }
+  const activeFileBase64 = fileBase64 || pdfBase64;
 
-  let textToAnalyze = rawText || '';
-  let fetchedUrlSuccess = false;
-  let fetchErrorMsg = '';
-
-  if (url) {
-    try {
-      console.log(`[AI Solver] Attempting to fetch URL: ${url}`);
-      let html = '';
-
-      // Strategy 1: Jina AI Reader (JS-rendering anti-bot reader for bank links)
-      try {
-        console.log(`[AI Solver] Trying Jina AI Reader for ${url}...`);
-        const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/json'
-          }
-        });
-        if (jinaRes.ok) {
-          html = await jinaRes.text();
-        }
-      } catch (jErr: any) {
-        console.warn(`[AI Solver] Jina AI Reader failed:`, jErr.message);
-      }
-
-      // Strategy 2: Direct fetch with browser User-Agent
-      if (!html || html.length < 200) {
-        try {
-          const response = await fetch(url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-              'Accept-Language': 'en-US,en;q=0.9',
-            },
-            redirect: 'follow',
-          });
-          if (response.ok) {
-            html = await response.text();
-          }
-        } catch (directErr: any) {
-          console.warn(`[AI Solver] Direct fetch failed for ${url}:`, directErr.message);
-        }
-      }
-
-      // Strategy 2: Proxy via allorigins if direct fetch returned empty/non-200
-      if (!html || html.length < 200) {
-        try {
-          console.log(`[AI Solver] Trying AllOrigins proxy for ${url}...`);
-          const proxyRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
-          if (proxyRes.ok) {
-            html = await proxyRes.text();
-          }
-        } catch (pErr: any) {
-          console.warn(`[AI Solver] Proxy fetch failed:`, pErr.message);
-        }
-      }
-
-      // Strategy 3: CorsProxy fallback
-      if (!html || html.length < 200) {
-        try {
-          console.log(`[AI Solver] Trying CorsProxy fallback for ${url}...`);
-          const proxyRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
-          if (proxyRes.ok) {
-            html = await proxyRes.text();
-          }
-        } catch (pErr: any) {
-          console.warn(`[AI Solver] CorsProxy fetch failed:`, pErr.message);
-        }
-      }
-
-      if (html && html.length > 200) {
-        // Sanitize heavy tags to preserve context window tokens
-        const sanitized = html
-          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-          .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-          .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '');
-        const textContent = sanitized.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-
-        if (textContent.length > 100) {
-          textToAnalyze = `Source URL: ${url}\n\nWebpage content:\n${textContent}\n\n${rawText ? 'Additional pasted details:\n' + rawText : ''}`;
-          fetchedUrlSuccess = true;
-          console.log('[AI Solver] URL fetched and sanitized successfully');
-        } else {
-          throw new Error('Webpage returned insufficient readable text.');
-        }
-      } else {
-        throw new Error('Bank anti-bot security blocked automated link scanning for this page (Chase/Bank bot restriction).');
-      }
-    } catch (err: any) {
-      console.error(`[AI Solver] Failed to fetch URL ${url}:`, err.message);
-      fetchErrorMsg = err.message;
-      if (!rawText) {
-        return res.status(422).json({
-          error: 'Bank anti-bot security blocked automated link scanning for this page. Please click "Paste Fine Print Text" above, copy & paste the promotional details directly, and AI will extract everything instantly!',
-          details: err.message,
-          fallbackRequired: true
-        });
-      }
-    }
+  if (!activeFileBase64 && (!rawText || !rawText.trim())) {
+    return res.status(400).json({ error: 'Please upload an offer document (PDF or Image) or paste fine print text to analyze.' });
   }
 
   try {
@@ -137,8 +38,8 @@ app.post('/api/extract-rules', async (req, res) => {
       }
     });
 
-    const systemInstruction = `You are an expert bank promotion auditor. Your job is to extract bank sign-up offer terms and qualifying rules from fine prints, disclosures, and offer pages.
-Carefully analyze the provided text and identify:
+    const systemInstruction = `You are an expert bank promotion auditor. Your job is to extract bank sign-up offer terms and qualifying rules from fine prints, disclosures, offer pages, or uploaded PDF/Image documents.
+Carefully analyze the provided document or text and identify:
 1. Bank Institution Name.
 2. The specific Account Product Name.
 3. The Account Type (must map to checking, savings, business_checking, business_savings, credit_card, or other).
@@ -155,10 +56,30 @@ For each requirement, determine:
 
 Return the response strictly as valid JSON matching the requested schema.`;
 
+    let contentsPayload: any;
+
+    if (activeFileBase64) {
+      console.log('[AI Solver] Analyzing uploaded document/image...');
+      const cleanData = activeFileBase64.replace(/^data:[^;]+;base64,/, '');
+      const mimeType = fileMimeType || (activeFileBase64.startsWith('data:image/') ? activeFileBase64.split(';')[0].replace('data:', '') : 'application/pdf');
+
+      contentsPayload = [
+        {
+          inlineData: {
+            mimeType,
+            data: cleanData
+          }
+        },
+        `Analyze this bank promotional offer document/image and extract the bank institution name, account product name, account type, cash bonus amount, promo code, and all qualification requirements (milestones, deadlines, deposit amounts) strictly according to system instructions. ${rawText ? '\nAdditional user text notes: ' + rawText : ''}`
+      ];
+    } else {
+      contentsPayload = rawText;
+    }
+
     console.log('[AI Solver] Prompting Gemini model gemini-2.5-flash...');
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: textToAnalyze,
+      contents: contentsPayload,
       config: {
         systemInstruction,
         responseMimeType: "application/json",
@@ -201,8 +122,6 @@ Return the response strictly as valid JSON matching the requested schema.`;
 
     return res.json({
       success: true,
-      fetchedUrlSuccess,
-      fetchErrorMsg: fetchedUrlSuccess ? '' : fetchErrorMsg,
       data
     });
 

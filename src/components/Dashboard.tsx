@@ -23,7 +23,10 @@ import {
   Building2,
   ExternalLink,
   ShieldCheck,
-  Loader2
+  Loader2,
+  Upload,
+  FileUp,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -53,11 +56,62 @@ export default function Dashboard({
   const [logDesc, setLogDesc] = useState<string>('');
 
   // Extractor States
-  const [weblinkUrl, setWeblinkUrl] = useState('');
   const [rawText, setRawText] = useState('');
-  const [showRawText, setShowRawText] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
+
+  // File Upload State (PDF or Image)
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [fileBase64, setFileBase64] = useState<string | null>(null);
+  const [fileMimeType, setFileMimeType] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validTypes = [
+      'application/pdf',
+      'image/png',
+      'image/jpeg',
+      'image/jpg',
+      'image/webp'
+    ];
+
+    const isPdf = file.name.toLowerCase().endsWith('.pdf');
+    const isImg = /\.(png|jpe?g|webp)$/i.test(file.name);
+
+    if (!validTypes.includes(file.type) && !isPdf && !isImg) {
+      setExtractError('Please upload a valid PDF document or image file (.pdf, .png, .jpg, .webp).');
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      setExtractError('File size is too large (max 20MB).');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      setFileBase64(result);
+      setFileMimeType(file.type || (isPdf ? 'application/pdf' : 'image/png'));
+      setFileName(file.name);
+      setUploadedFile(file);
+      setExtractError(null);
+    };
+    reader.onerror = () => {
+      setExtractError('Failed to read the selected file.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveFile = () => {
+    setUploadedFile(null);
+    setFileBase64(null);
+    setFileMimeType(null);
+    setFileName(null);
+  };
 
   // Extracted Offer State for review & confirmation
   const [extractedOffer, setExtractedOffer] = useState<{
@@ -75,10 +129,9 @@ export default function Dashboard({
   const [addedSuccessMsg, setAddedSuccessMsg] = useState<string | null>(null);
 
   // Handle Extraction via AI
-  const handleExtractUrl = async (urlToFetch?: string) => {
-    const targetUrl = urlToFetch || weblinkUrl;
-    if (!targetUrl && !rawText) {
-      setExtractError('Please enter a bank offer Web Link URL or paste the offer fine print text.');
+  const handleExtractOffer = async () => {
+    if (!fileBase64 && (!rawText || !rawText.trim())) {
+      setExtractError('Please upload an offer document (PDF or Image) or paste the fine print text.');
       return;
     }
 
@@ -91,16 +144,17 @@ export default function Dashboard({
       const response = await fetch('/api/extract-rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl, rawText })
+        body: JSON.stringify({
+          fileBase64,
+          fileMimeType,
+          fileName,
+          rawText
+        })
       });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        setShowRawText(true);
-        if (response.status === 404) {
-          throw new Error(errData.error || 'Chase / Bank anti-bot security blocks automated link reading (404/403). Please paste the promotional terms or fine print text into the box below and AI will extract it immediately!');
-        }
-        throw new Error(errData.error || `Failed to read link content (Status: ${response.status}). Please paste the promotional terms below.`);
+        throw new Error(errData.error || `Extraction failed (Status: ${response.status}). Please check your uploaded document or fine print text.`);
       }
 
       const result = await response.json();
@@ -136,16 +190,14 @@ export default function Dashboard({
           openingDate: todayStr,
           requirements: mappedReqs,
           notes: d.notes || '',
-          offerLink: targetUrl || ''
+          offerLink: fileName ? `Document: ${fileName}` : 'Pasted Fine Print'
         });
-
-        if (urlToFetch) setWeblinkUrl(urlToFetch);
       } else {
-        throw new Error('Could not parse promotion terms from link.');
+        throw new Error('Could not parse promotion terms from the provided input.');
       }
     } catch (err: any) {
       console.error('[Offer Extractor] Error:', err);
-      setExtractError(err.message || 'Failed to extract offer details. Please check the URL or try pasting the offer fine print text.');
+      setExtractError(err.message || 'Failed to extract offer details. Please upload a PDF/Image or paste the fine print text.');
     } finally {
       setIsExtracting(false);
     }
@@ -176,8 +228,11 @@ export default function Dashboard({
 
     setAddedSuccessMsg(`Successfully added ${newAccount.bankName} (${newAccount.accountName}) with $${newAccount.bonusAmount} bonus to your profile!`);
     setExtractedOffer(null);
-    setWeblinkUrl('');
     setRawText('');
+    setUploadedFile(null);
+    setFileBase64(null);
+    setFileMimeType(null);
+    setFileName(null);
   };
 
   // Calculations
@@ -354,101 +409,141 @@ export default function Dashboard({
 
   return (
     <div className="space-y-8">
-      {/* Primary Hero Section: Web Link Offer Extractor */}
+      {/* Primary Hero Section: AI Offer Document & Fine Print Extractor */}
       <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 rounded-3xl p-6 md:p-8 text-white shadow-xl border border-indigo-800/40 space-y-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-500/20 border border-indigo-400/30 rounded-full text-indigo-300 text-xs font-semibold">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
-              <span>AI Offer Intelligence & Automatic Extractor</span>
-            </div>
-            <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white">
-              Add Account via Bank Offer Web Link
-            </h2>
-            <p className="text-indigo-200/80 text-xs md:text-sm max-w-2xl leading-relaxed">
-              Paste the URL of the promotion page you used to open your bank account. AI will scan the offer, extract the cash bonus amount, qualification requirements, and terms, and add it directly to your <strong>My Accounts</strong> profile and <strong>ROI Calculator</strong>.
-            </p>
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-500/20 border border-indigo-400/30 rounded-full text-indigo-300 text-xs font-semibold">
+            <Sparkles className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+            <span>AI Offer Intelligence & Automatic Extractor</span>
           </div>
-          <div className="shrink-0 flex items-center gap-2">
-            <button
-              onClick={() => setShowRawText(!showRawText)}
-              className="text-xs font-semibold text-indigo-300 hover:text-white bg-indigo-950/60 hover:bg-indigo-900/80 px-3 py-2 rounded-xl border border-indigo-700/50 transition flex items-center gap-1.5"
-            >
-              <FileText className="w-4 h-4" />
-              <span>{showRawText ? 'Hide Text Fallback' : 'Paste Fine Print Text'}</span>
-            </button>
-          </div>
+          <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white">
+            Extract Bank Offer Details with AI
+          </h2>
+          <p className="text-indigo-200/80 text-xs md:text-sm max-w-2xl leading-relaxed">
+            Upload an offer document (PDF or screenshot image) or paste the fine print text below. AI will scan the offer, extract the cash bonus amount, qualification milestones, and deadlines, and add it directly to your profile.
+          </p>
         </div>
 
-        {/* Input Form */}
-        <div className="space-y-4">
-          <form 
-            onSubmit={(e) => { e.preventDefault(); handleExtractUrl(); }} 
-            className="flex flex-col md:flex-row items-stretch gap-3"
-          >
-            <div className="relative flex-1">
-              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                <LinkIcon className="w-5 h-5 text-indigo-400" />
+        {/* Dual Input Options Layout */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Option 1: File Upload (PDF or Image) */}
+          <div className="bg-slate-900/80 border border-indigo-500/30 rounded-2xl p-4 flex flex-col justify-between space-y-3">
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <label className="text-xs font-bold text-indigo-200 flex items-center gap-1.5">
+                  <Upload className="w-4 h-4 text-indigo-400" />
+                  <span>Option 1: Upload Offer PDF or Image</span>
+                </label>
+                <span className="text-[10px] text-indigo-300/70">.pdf, .png, .jpg, .webp (max 20MB)</span>
               </div>
-              <input
-                type="url"
-                required={!rawText}
-                placeholder="Paste offer URL (e.g. https://www.chase.com/checking/promo)"
-                value={weblinkUrl}
-                onChange={(e) => setWeblinkUrl(e.target.value)}
-                className="w-full pl-11 pr-4 py-3.5 bg-slate-900/90 border border-indigo-500/30 rounded-2xl text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-400 transition"
-              />
-            </div>
 
-            <button
-              type="submit"
-              disabled={isExtracting}
-              className="px-6 py-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 text-white font-bold text-sm rounded-2xl transition shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 shrink-0 cursor-pointer"
-            >
-              {isExtracting ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span>Scanning & Analyzing...</span>
-                </>
+              {!uploadedFile ? (
+                <label className="flex flex-col items-center justify-center border-2 border-dashed border-indigo-500/40 hover:border-indigo-400 bg-indigo-950/30 hover:bg-indigo-900/40 rounded-xl p-5 cursor-pointer transition text-center group min-h-[120px]">
+                  <input 
+                    type="file" 
+                    accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp,.pdf,.png,.jpg,.jpeg,.webp" 
+                    onChange={handleFileChange} 
+                    className="hidden" 
+                  />
+                  <div className="flex flex-col items-center gap-2 text-indigo-300 group-hover:text-white font-semibold text-xs">
+                    <FileUp className="w-6 h-6 text-indigo-400 group-hover:scale-110 transition" />
+                    <span>Drop or click to upload offer PDF / Image</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    (Webpage saved as PDF or screenshot of offer page)
+                  </p>
+                </label>
               ) : (
-                <>
-                  <Sparkles className="w-5 h-5" />
-                  <span>Extract Offer Details</span>
-                </>
+                <div className="flex items-center justify-between bg-indigo-950/90 border border-emerald-500/40 rounded-xl p-3">
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <div className="p-2.5 bg-emerald-500/20 rounded-xl text-emerald-400 shrink-0">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <div className="truncate">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-white truncate">{fileName}</span>
+                        <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 text-[10px] font-extrabold rounded-full border border-emerald-500/30 shrink-0">
+                          Ready
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-indigo-300 mt-0.5">
+                        {(uploadedFile.size / (1024 * 1024)).toFixed(2)} MB &bull; Attached
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveFile}
+                    className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-rose-400 rounded-lg transition shrink-0"
+                    title="Remove File"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               )}
-            </button>
-          </form>
+            </div>
+          </div>
 
-          {/* Fallback Fine Print Textarea */}
-          {showRawText && (
-            <div className="space-y-2 pt-2 border-t border-indigo-800/40">
-              <label className="text-xs font-semibold text-indigo-200 block">
-                Paste Offer Fine Print / Disclosures Text (Fallback option if URL blocks external access):
+          {/* Option 2: Fine Print Textarea */}
+          <div className="bg-slate-900/80 border border-indigo-500/30 rounded-2xl p-4 flex flex-col justify-between space-y-3">
+            <div>
+              <label className="text-xs font-bold text-indigo-200 flex items-center gap-1.5 mb-2">
+                <FileText className="w-4 h-4 text-indigo-400" />
+                <span>Option 2: Paste Fine Print Text</span>
               </label>
               <textarea
-                rows={3}
-                placeholder="Paste full offer disclosures or fine print here..."
+                rows={4}
+                placeholder="Paste promotional terms, fine print disclosures, requirement rules, or offer details here..."
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
-                className="w-full p-3 bg-slate-900/90 border border-indigo-500/30 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full p-3 bg-slate-950/80 border border-indigo-500/30 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-400 transition"
               />
             </div>
-          )}
-
-          {/* Error Banner */}
-          {extractError && (
-            <div className="p-4 bg-rose-950/80 border border-rose-600/50 rounded-2xl text-rose-200 text-xs flex items-start gap-2.5">
-              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <span className="font-bold text-sm block">Extraction Warning</span>
-                <p>{extractError}</p>
-                <p className="text-[11px] text-rose-300">
-                  Tip: If the bank website restricts automated scraping, click <strong>"Paste Fine Print Text"</strong> above and paste the promotional terms text directly!
-                </p>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
+
+        {/* Action Button */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-indigo-800/40">
+          <p className="text-xs text-indigo-200/70">
+            {uploadedFile && rawText
+              ? 'Analyzing attached file + pasted notes'
+              : uploadedFile
+              ? `Ready to extract from ${fileName}`
+              : rawText
+              ? 'Ready to extract from pasted fine print text'
+              : 'Upload a PDF/Image file or paste fine print text above'}
+          </p>
+
+          <button
+            type="button"
+            onClick={handleExtractOffer}
+            disabled={isExtracting || (!uploadedFile && !rawText.trim())}
+            className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold text-sm rounded-2xl transition shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 cursor-pointer"
+          >
+            {isExtracting ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin text-white" />
+                <span>Extracting Offer Details...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-5 h-5 text-indigo-200" />
+                <span>Extract Offer Details</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Error Banner */}
+        {extractError && (
+          <div className="p-4 bg-rose-950/80 border border-rose-600/50 rounded-2xl text-rose-200 text-xs flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <span className="font-bold text-sm block">Extraction Notice</span>
+              <p>{extractError}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Success Notification Banner */}

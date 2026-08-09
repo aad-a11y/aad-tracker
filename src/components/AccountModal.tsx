@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BankAccount, AccountType, BonusStatus, Requirement, RULE_TEMPLATES, RuleTemplate } from '../types';
-import { X, Plus, Trash2, Calendar, ShieldCheck, RefreshCw, Sparkles, HelpCircle } from 'lucide-react';
+import { X, Plus, Trash2, Calendar, ShieldCheck, RefreshCw, Sparkles, HelpCircle, Upload, FileUp, FileText } from 'lucide-react';
 
 interface AccountModalProps {
   onClose: () => void;
@@ -42,25 +42,67 @@ export default function AccountModal({ onClose, onSave, accountToEdit, initialPr
   const [tempDays, setTempDays] = useState<number>(90);
 
   // AI Extraction States
-  const [urlToImport, setUrlToImport] = useState('');
   const [textToImport, setTextToImport] = useState('');
+  const [aiModalFile, setAiModalFile] = useState<File | null>(null);
+  const [aiModalFileBase64, setAiModalFileBase64] = useState<string | null>(null);
+  const [aiModalFileMime, setAiModalFileMime] = useState<string | null>(null);
+  const [aiModalFileName, setAiModalFileName] = useState<string | null>(null);
+
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStatus, setAiStatus] = useState('');
   const [aiError, setAiError] = useState<string | null>(null);
-  const [aiSuccess, setAiSuccess] = useState<{ bank: string; product: string; rulesCount: number; fetchedSuccess: boolean } | null>(null);
-  const [showRawTextInput, setShowRawTextInput] = useState(false);
+  const [aiSuccess, setAiSuccess] = useState<{ bank: string; product: string; rulesCount: number } | null>(null);
+
+  const handleModalFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+    const isPdf = file.name.toLowerCase().endsWith('.pdf');
+    const isImg = /\.(png|jpe?g|webp)$/i.test(file.name);
+
+    if (!validTypes.includes(file.type) && !isPdf && !isImg) {
+      setAiError('Please select a valid PDF or Image file (.pdf, .png, .jpg, .webp).');
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      setAiError('File size is too large (max 20MB).');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAiModalFileBase64(reader.result as string);
+      setAiModalFileMime(file.type || (isPdf ? 'application/pdf' : 'image/png'));
+      setAiModalFileName(file.name);
+      setAiModalFile(file);
+      setAiError(null);
+    };
+    reader.onerror = () => {
+      setAiError('Failed to read selected file.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveModalFile = () => {
+    setAiModalFile(null);
+    setAiModalFileBase64(null);
+    setAiModalFileMime(null);
+    setAiModalFileName(null);
+  };
 
   // AI Extraction Handler
   const handleAIExtract = async () => {
-    if (!urlToImport && !textToImport) {
-      setAiError('Please enter an Offer URL or paste the fine prints to extract rules.');
+    if (!aiModalFileBase64 && (!textToImport || !textToImport.trim())) {
+      setAiError('Please upload an offer document (PDF or Image) or paste fine print text.');
       return;
     }
 
     setAiLoading(true);
     setAiError(null);
     setAiSuccess(null);
-    setAiStatus('Fetching webpage terms...');
+    setAiStatus('Analyzing offer details with AI...');
 
     try {
       const response = await fetch('/api/extract-rules', {
@@ -69,21 +111,19 @@ export default function AccountModal({ onClose, onSave, accountToEdit, initialPr
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          url: urlToImport,
+          fileBase64: aiModalFileBase64,
+          fileMimeType: aiModalFileMime,
+          fileName: aiModalFileName,
           rawText: textToImport
         })
       });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        setShowRawTextInput(true);
-        if (response.status === 404) {
-          throw new Error(errData.error || 'Chase / Bank anti-bot security blocks automated link reading (404/403). Please paste the promotional terms or fine print text below!');
-        }
-        throw new Error(errData.error || `Failed to read link content (Status: ${response.status}). Please paste the promotional terms below.`);
+        throw new Error(errData.error || `Failed to parse document (Status: ${response.status}). Please verify your file or text.`);
       }
 
-      setAiStatus('Auditing fine prints & extracting requirements...');
+      setAiStatus('Extracting requirements & bonus terms...');
       const result = await response.json();
 
       if (result.success && result.data) {
@@ -96,7 +136,7 @@ export default function AccountModal({ onClose, onSave, accountToEdit, initialPr
         if (extracted.bonusAmount) setBonusAmount(extracted.bonusAmount);
         if (extracted.promoCode) setPromoCode(extracted.promoCode);
         if (extracted.notes) setNotes(extracted.notes);
-        if (urlToImport) setOfferLink(urlToImport);
+        if (aiModalFileName) setOfferLink(`Document: ${aiModalFileName}`);
         
         // Add requirements
         if (Array.isArray(extracted.requirements) && extracted.requirements.length > 0) {
@@ -118,15 +158,14 @@ export default function AccountModal({ onClose, onSave, accountToEdit, initialPr
         }
 
         setAiSuccess({
-          bank: extracted.bankName,
-          product: extracted.accountName,
-          rulesCount: extracted.requirements?.length || 0,
-          fetchedSuccess: result.fetchedUrlSuccess
+          bank: extracted.bankName || 'Bank',
+          product: extracted.accountName || 'Account',
+          rulesCount: extracted.requirements?.length || 0
         });
 
         // Clear import inputs on success
-        setUrlToImport('');
         setTextToImport('');
+        handleRemoveModalFile();
       } else {
         throw new Error(result.error || 'Failed to extract terms from offer.');
       }
@@ -167,7 +206,6 @@ export default function AccountModal({ onClose, onSave, accountToEdit, initialPr
         if (initialPreFill.bonusAmount) setBonusAmount(initialPreFill.bonusAmount);
         if (initialPreFill.url) {
           setOfferLink(initialPreFill.url);
-          setUrlToImport(initialPreFill.url);
         }
       }
     }
@@ -327,88 +365,89 @@ export default function AccountModal({ onClose, onSave, accountToEdit, initialPr
                     AI Sign-up Offer Reader
                   </h5>
                   <p className="text-slate-500 text-xs mt-0.5 leading-relaxed">
-                    Automatically parse full promo rules, deadlines, targets, and monthly fee disclosures from any bank webpage link or copy-pasted fine print.
+                    Upload an offer document (PDF or screenshot image) or paste fine print disclosures below to automatically extract bonus terms, rules, and deadlines.
                   </p>
                 </div>
               </div>
 
               <div className="space-y-3 pt-1">
-                {/* Offer URL Input */}
-                <div>
-                  <label className="block text-[10px] font-bold uppercase text-indigo-850 mb-1">
-                    Offer Page Link
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="url"
-                      placeholder="e.g. https://www.chase.com/personal/checking/offer..."
-                      value={urlToImport}
-                      onChange={(e) => setUrlToImport(e.target.value)}
-                      className="flex-1 px-3 py-2 border border-indigo-150 rounded-lg text-xs bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* File Upload Option */}
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase text-indigo-900 mb-1 flex items-center gap-1">
+                      <Upload className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>1. Upload PDF or Image</span>
+                    </label>
+
+                    {!aiModalFile ? (
+                      <label className="flex flex-col items-center justify-center border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-white hover:bg-indigo-50/50 rounded-xl p-3 cursor-pointer transition text-center min-h-[90px]">
+                        <input
+                          type="file"
+                          accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp,.pdf,.png,.jpg,.jpeg,.webp"
+                          onChange={handleModalFileChange}
+                          className="hidden"
+                        />
+                        <FileUp className="w-5 h-5 text-indigo-500 mb-1" />
+                        <span className="text-xs font-semibold text-indigo-950">Upload PDF / Image</span>
+                        <span className="text-[10px] text-slate-400">Max 20MB</span>
+                      </label>
+                    ) : (
+                      <div className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded-xl p-2.5">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <span className="text-xs font-bold text-slate-800 truncate">{aiModalFileName}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRemoveModalFile}
+                          className="p-1 hover:bg-indigo-100 text-slate-500 rounded-lg transition shrink-0"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Textarea Option */}
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase text-indigo-900 mb-1 flex items-center gap-1">
+                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>2. Paste Fine Print Text</span>
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Paste promotional terms or fine print disclosures..."
+                      value={textToImport}
+                      onChange={(e) => setTextToImport(e.target.value)}
+                      className="w-full px-3 py-2 border border-indigo-200 rounded-xl text-xs bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                     />
-                    <button
-                      type="button"
-                      disabled={aiLoading}
-                      onClick={handleAIExtract}
-                      className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-semibold text-xs px-4 py-2 rounded-lg transition-all shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
-                    >
-                      {aiLoading ? (
-                        <>
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>Parsing...</span>
-                        </>
-                      ) : (
-                        <span>Extract with AI</span>
-                      )}
-                    </button>
                   </div>
                 </div>
 
-                {/* Fine Print pasting option toggle */}
-                <div className="pt-0.5">
+                <div className="flex justify-end pt-1">
                   <button
                     type="button"
-                    onClick={() => setShowRawTextInput(!showRawTextInput)}
-                    className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition flex items-center gap-1"
+                    disabled={aiLoading || (!aiModalFileBase64 && !textToImport.trim())}
+                    onClick={handleAIExtract}
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition shadow-sm flex items-center gap-2 cursor-pointer"
                   >
-                    {showRawTextInput ? "Hide Fine Print box" : "Or copy-paste disclosures/fine print directly (fallback)"}
+                    {aiLoading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Analyzing with AI...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Extract Offer Details</span>
+                      </>
+                    )}
                   </button>
-
-                  {showRawTextInput && (
-                    <div className="mt-2 space-y-2">
-                      <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
-                        Pasted Promotion Terms / Fine Prints
-                      </label>
-                      <textarea
-                        rows={3}
-                        placeholder="Copy and paste the full fine print, disclosure blocks, or entire text from the offer page here..."
-                        value={textToImport}
-                        onChange={(e) => setTextToImport(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-sans"
-                      />
-                      {!urlToImport && (
-                        <div className="flex justify-end">
-                          <button
-                            type="button"
-                            disabled={aiLoading}
-                            onClick={handleAIExtract}
-                            className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-lg transition flex items-center gap-1"
-                          >
-                            {aiLoading ? (
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <span>Extract from Pasted Text</span>
-                            )}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
 
                 {/* Loading status details */}
                 {aiLoading && aiStatus && (
-                  <div className="bg-white/80 border border-indigo-100 rounded-lg p-2.5 text-xs text-indigo-700 flex items-center gap-2 font-medium">
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2.5 text-xs text-indigo-700 flex items-center gap-2 font-medium">
                     <RefreshCw className="w-3.5 h-3.5 text-indigo-600 animate-spin" />
                     <span>{aiStatus}</span>
                   </div>
@@ -421,26 +460,18 @@ export default function AccountModal({ onClose, onSave, accountToEdit, initialPr
                       ✅ AI Sign-up Offer Successfully Loaded!
                     </p>
                     <p className="leading-relaxed">
-                      We've identified <strong>{aiSuccess.bank} {aiSuccess.product}</strong> and successfully populated the offer details. We also added <strong>{aiSuccess.rulesCount} tracked qualifying rules</strong> to Section 2 of this form!
+                      We've identified <strong>{aiSuccess.bank} {aiSuccess.product}</strong> and populated the offer details below along with <strong>{aiSuccess.rulesCount} tracked qualifying rules</strong>!
                     </p>
-                    {!aiSuccess.fetchedSuccess && urlToImport && (
-                      <p className="text-[10px] text-amber-700 font-semibold mt-1">
-                        ⚠️ Note: Web link was blocked by bank crawlers, so the terms were parsed successfully using your pasted fine prints fallback.
-                      </p>
-                    )}
                   </div>
                 )}
 
                 {/* Error Feedback banner */}
                 {aiError && (
-                  <div className="bg-rose-50 border border-rose-150 rounded-lg p-3 text-xs text-rose-800 space-y-1.5">
+                  <div className="bg-rose-50 border border-rose-150 rounded-lg p-3 text-xs text-rose-800 space-y-1">
                     <p className="font-bold flex items-center gap-1">
                       ❌ AI Parsing Failed
                     </p>
                     <p className="leading-relaxed">{aiError}</p>
-                    <p className="text-[10px] text-rose-700">
-                      Recommendation: Bank websites often employ strong anti-bot and Cloudflare security filters. Try copying and pasting the fine print details directly into the "fallback copy-paste" box above!
-                    </p>
                   </div>
                 )}
               </div>

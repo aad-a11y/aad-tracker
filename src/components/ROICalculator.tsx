@@ -288,18 +288,6 @@ export default function ROICalculator({ accounts = [], onSelectAccount }: ROICal
                   className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-indigo-500 focus:bg-white text-slate-800 text-sm font-bold rounded-xl pl-8 pr-4 py-2.5 outline-none transition font-mono"
                 />
               </div>
-              <div className="flex gap-1.5 mt-2">
-                {[150, 300, 500, 1000].map((val) => (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => setBonusAmount(val)}
-                    className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-600 text-[10px] font-bold py-1 px-1.5 rounded-lg border border-slate-200/50 transition cursor-pointer"
-                  >
-                    ${val}
-                  </button>
-                ))}
-              </div>
             </div>
 
             {/* Required Deposit */}
@@ -319,18 +307,6 @@ export default function ROICalculator({ accounts = [], onSelectAccount }: ROICal
                   placeholder="0"
                   className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-indigo-500 focus:bg-white text-slate-800 text-sm font-bold rounded-xl pl-8 pr-4 py-2.5 outline-none transition font-mono"
                 />
-              </div>
-              <div className="flex gap-1.5 mt-2">
-                {[0, 10000, 25000, 50000, 100000].map((val) => (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => setDepositAmount(val)}
-                    className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-600 text-[10px] font-bold py-1 px-1.5 rounded-lg border border-slate-200/50 transition cursor-pointer"
-                  >
-                    {val === 0 ? '$0' : `$${val / 1000}k`}
-                  </button>
-                ))}
               </div>
             </div>
 
@@ -360,18 +336,6 @@ export default function ROICalculator({ accounts = [], onSelectAccount }: ROICal
                   onChange={(e) => setHoldPeriod(Number(e.target.value))}
                   className="w-20 text-center bg-slate-50 border border-slate-200 text-slate-800 text-sm font-semibold rounded-xl py-1.5 font-mono outline-none focus:border-indigo-500"
                 />
-              </div>
-              <div className="flex gap-1.5 mt-2.5">
-                {[30, 60, 90, 105, 120].map((val) => (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => setHoldPeriod(val)}
-                    className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-600 text-[10px] font-bold py-1 px-1.5 rounded-lg border border-slate-200/50 transition cursor-pointer"
-                  >
-                    {val}d
-                  </button>
-                ))}
               </div>
             </div>
 
