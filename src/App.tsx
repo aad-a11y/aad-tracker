@@ -19,9 +19,47 @@ import {
   Menu, 
   X,
   Calculator,
-  ShieldCheck
+  ShieldCheck,
+  LogOut,
+  User as UserIcon,
+  Cloud,
+  Loader2,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { auth, signInWithGoogle, logOut } from './lib/firebase';
+import { 
+  saveUserProfile, 
+  fetchAccountsFromFirestore, 
+  saveAccountToFirestore, 
+  saveAllAccountsToFirestore, 
+  deleteAccountFromFirestore, 
+  fetchRulesFromFirestore, 
+  saveAllRulesToFirestore 
+} from './lib/sync';
+
+const GoogleIcon = () => (
+  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+    <path
+      fill="#4285F4"
+      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+    />
+  </svg>
+);
 
 export default function App() {
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
@@ -32,6 +70,12 @@ export default function App() {
   const [accountToEdit, setAccountToEdit] = useState<BankAccount | undefined>(undefined);
   const [initialPreFill, setInitialPreFill] = useState<{ url?: string; bankName?: string; bonusAmount?: number } | undefined>(undefined);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+
+  // User Authentication & Firestore Sync State
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   // Helper to filter out legacy sample/demo accounts
   const isSampleAccount = (acc: BankAccount) => {
@@ -67,33 +111,98 @@ export default function App() {
     );
   };
 
-  // Load offline local storage data on mount
+  // Auth & Sync Initialization
   useEffect(() => {
-    const saved = localStorage.getItem('bank_bonus_tracker_accounts');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        const clean = (Array.isArray(parsed) ? parsed : []).filter(acc => !isSampleAccount(acc));
-        setAccounts(clean);
-        localStorage.setItem('bank_bonus_tracker_accounts', JSON.stringify(clean));
-      } catch (e) {
-        setAccounts([]);
-      }
-    } else {
-      setAccounts([]);
-    }
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        setSyncing(true);
+        try {
+          // 1. Create or update basic user profile doc in Firestore (no PII beyond Auth standard metadata)
+          await saveUserProfile(currentUser.uid, {
+            email: currentUser.email,
+            displayName: currentUser.displayName,
+            photoURL: currentUser.photoURL
+          });
 
-    const savedRules = localStorage.getItem('bank_reeligibility_rules');
-    if (savedRules) {
-      try {
-        const parsed = JSON.parse(savedRules);
-        setRules(Array.isArray(parsed) ? parsed : []);
-      } catch (e) {
-        setRules([]);
+          // 2. Fetch user's persistent extracted offers from Firestore
+          const remoteAccounts = await fetchAccountsFromFirestore(currentUser.uid);
+
+          // Get local storage accounts
+          const localSaved = localStorage.getItem('bank_bonus_tracker_accounts');
+          let localAccounts: BankAccount[] = [];
+          if (localSaved) {
+            try {
+              localAccounts = JSON.parse(localSaved).filter((a: BankAccount) => !isSampleAccount(a));
+            } catch (e) {
+              localAccounts = [];
+            }
+          }
+
+          // Merge: keep all remote accounts, upload any local offers extracted prior to logging in
+          const remoteIds = new Set(remoteAccounts.map(a => a.id));
+          const unsyncedLocal = localAccounts.filter(a => !remoteIds.has(a.id));
+          const mergedAccounts = [...remoteAccounts, ...unsyncedLocal];
+
+          setAccounts(mergedAccounts);
+          localStorage.setItem('bank_bonus_tracker_accounts', JSON.stringify(mergedAccounts));
+
+          if (unsyncedLocal.length > 0) {
+            await saveAllAccountsToFirestore(currentUser.uid, mergedAccounts);
+          }
+
+          // 3. Sync Rules
+          const remoteRules = await fetchRulesFromFirestore(currentUser.uid);
+          if (remoteRules.length > 0) {
+            setRules(remoteRules);
+            localStorage.setItem('bank_reeligibility_rules', JSON.stringify(remoteRules));
+          } else {
+            const savedRules = localStorage.getItem('bank_reeligibility_rules');
+            if (savedRules) {
+              try {
+                const parsedRules = JSON.parse(savedRules);
+                if (parsedRules.length > 0) {
+                  setRules(parsedRules);
+                  await saveAllRulesToFirestore(currentUser.uid, parsedRules);
+                }
+              } catch (e) {}
+            }
+          }
+        } catch (err) {
+          console.error("Error syncing profile with Firestore:", err);
+        } finally {
+          setSyncing(false);
+        }
+      } else {
+        // Guest mode fallback
+        const saved = localStorage.getItem('bank_bonus_tracker_accounts');
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            const clean = (Array.isArray(parsed) ? parsed : []).filter((acc: BankAccount) => !isSampleAccount(acc));
+            setAccounts(clean);
+          } catch (e) {
+            setAccounts([]);
+          }
+        } else {
+          setAccounts([]);
+        }
+
+        const savedRules = localStorage.getItem('bank_reeligibility_rules');
+        if (savedRules) {
+          try {
+            setRules(JSON.parse(savedRules));
+          } catch (e) {
+            setRules([]);
+          }
+        } else {
+          setRules([]);
+        }
       }
-    } else {
-      setRules([]);
-    }
+      setAuthLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Save to local state and local storage cache
@@ -103,13 +212,16 @@ export default function App() {
   };
 
   // Custom Rules action
-  const saveRules = (updatedRules: BankReEligibilityRule[]) => {
+  const saveRules = async (updatedRules: BankReEligibilityRule[]) => {
     setRules(updatedRules);
     localStorage.setItem('bank_reeligibility_rules', JSON.stringify(updatedRules));
+    if (user?.uid) {
+      await saveAllRulesToFirestore(user.uid, updatedRules);
+    }
   };
 
   // Callback to log progress directly
-  const handleLogProgress = (accountId: string, requirementId: string, amount: number, description: string) => {
+  const handleLogProgress = async (accountId: string, requirementId: string, amount: number, description: string) => {
     const todayStr = new Date().toISOString().split('T')[0];
     let updatedAcc: BankAccount | null = null;
     
@@ -151,27 +263,39 @@ export default function App() {
     });
 
     saveAccountsLocally(updated);
+    if (user?.uid && updatedAcc) {
+      await saveAccountToFirestore(user.uid, updatedAcc);
+    }
   };
 
-  const handleUpdateAccount = (updatedAccount: BankAccount) => {
+  const handleUpdateAccount = async (updatedAccount: BankAccount) => {
     const updated = accounts.map(a => a.id === updatedAccount.id ? updatedAccount : a);
     saveAccountsLocally(updated);
+    if (user?.uid) {
+      await saveAccountToFirestore(user.uid, updatedAccount);
+    }
   };
 
-  const handleDeleteAccount = (accountId: string) => {
+  const handleDeleteAccount = async (accountId: string) => {
     const updated = accounts.filter(a => a.id !== accountId);
     saveAccountsLocally(updated);
     if (selectedAccountId === accountId) {
       setSelectedAccountId(null);
     }
+    if (user?.uid) {
+      await deleteAccountFromFirestore(user.uid, accountId);
+    }
   };
 
-  const handleClearAllAccounts = () => {
+  const handleClearAllAccounts = async () => {
     saveAccountsLocally([]);
     setSelectedAccountId(null);
+    if (user?.uid) {
+      await saveAllAccountsToFirestore(user.uid, []);
+    }
   };
 
-  const handleSaveNewOrEditedAccount = (account: BankAccount) => {
+  const handleSaveNewOrEditedAccount = async (account: BankAccount) => {
     let updated: BankAccount[];
     if (accounts.some(a => a.id === account.id)) {
       updated = accounts.map(a => a.id === account.id ? account : a);
@@ -183,6 +307,10 @@ export default function App() {
     setAccountToEdit(undefined);
     setSelectedAccountId(account.id);
     setActiveTab('accounts');
+
+    if (user?.uid) {
+      await saveAccountToFirestore(user.uid, account);
+    }
   };
 
   // Count critical requirements (within 14 days)
@@ -280,16 +408,89 @@ export default function App() {
               </button>
             </nav>
 
-            {/* Right actions / Mode badge & New Tracker */}
+            {/* Right actions / Google Auth & New Tracker */}
             <div className="hidden md:flex items-center gap-3 shrink-0">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 bg-slate-50 px-3 py-1.5 border border-slate-200/80 rounded-xl">
-                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Guest Beta Mode</span>
-              </div>
+              {authLoading ? (
+                <div className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-slate-400 bg-slate-50 border border-slate-200/80 rounded-xl">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                  <span>Checking status...</span>
+                </div>
+              ) : user ? (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                    className="flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200/80 rounded-xl px-3 py-1.5 transition text-left cursor-pointer"
+                  >
+                    {user.photoURL ? (
+                      <img
+                        src={user.photoURL}
+                        alt={user.displayName || 'User'}
+                        className="w-6 h-6 rounded-full object-cover border border-indigo-200"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-bold text-[10px] flex items-center justify-center">
+                        {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                      </div>
+                    )}
+                    <div className="hidden sm:block">
+                      <span className="block text-xs font-bold text-slate-800 leading-tight truncate max-w-[120px]">
+                        {user.displayName || user.email?.split('@')[0]}
+                      </span>
+                      <span className="block text-[9px] font-semibold text-emerald-600 flex items-center gap-0.5">
+                        <Cloud className="w-2.5 h-2.5" />
+                        <span>Cloud Saved</span>
+                      </span>
+                    </div>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  </button>
+
+                  {userDropdownOpen && (
+                    <div className="absolute right-0 mt-2 w-60 bg-white rounded-2xl shadow-xl border border-slate-100 py-2 z-50">
+                      <div className="px-4 py-2 border-b border-slate-100">
+                        <p className="text-xs font-bold text-slate-900 truncate">{user.displayName || 'User Profile'}</p>
+                        <p className="text-[10px] text-slate-500 truncate">{user.email}</p>
+                        <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">
+                          <Cloud className="w-3 h-3 text-emerald-600" />
+                          <span>Offers linked to Google Profile</span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setUserDropdownOpen(false);
+                          await logOut();
+                        }}
+                        className="w-full text-left px-4 py-2.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition flex items-center gap-2 cursor-pointer"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>Sign Out</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await signInWithGoogle();
+                    } catch (err: any) {
+                      console.error('Sign in failed', err);
+                    }
+                  }}
+                  className="flex items-center gap-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl transition shadow-xs cursor-pointer"
+                >
+                  <GoogleIcon />
+                  <span>Sign in with Google</span>
+                </button>
+              )}
 
               <button
                 onClick={() => { setAccountToEdit(undefined); setIsModalOpen(true); }}
-                className="flex items-center gap-1 bg-slate-950 text-white font-semibold text-xs px-3 py-2 rounded-xl hover:bg-slate-800 transition shadow-sm cursor-pointer"
+                className="flex items-center gap-1 bg-slate-950 text-white font-semibold text-xs px-3.5 py-2 rounded-xl hover:bg-slate-800 transition shadow-sm cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" /> New Tracker
               </button>
@@ -347,13 +548,51 @@ export default function App() {
             </div>
             
             <div className="pt-4 border-t border-slate-100 space-y-2">
-              <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-600 bg-slate-50 py-2 border border-slate-100 rounded-lg">
-                <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                <span>Guest Beta Mode</span>
-              </div>
+              {user ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    {user.photoURL ? (
+                      <img src={user.photoURL} alt="" className="w-7 h-7 rounded-full shrink-0" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="w-7 h-7 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center shrink-0">
+                        {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                      </div>
+                    )}
+                    <div className="truncate">
+                      <p className="text-xs font-bold text-slate-900 truncate">{user.displayName || user.email}</p>
+                      <p className="text-[10px] text-emerald-600 font-medium">Offers saved to profile</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setShowMobileMenu(false);
+                      await logOut();
+                    }}
+                    className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg shrink-0 cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setShowMobileMenu(false);
+                    try {
+                      await signInWithGoogle();
+                    } catch (e) {}
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-800 font-bold text-xs py-2.5 rounded-xl shadow-xs"
+                >
+                  <GoogleIcon />
+                  <span>Sign in with Google</span>
+                </button>
+              )}
+
               <button
                 onClick={() => { setAccountToEdit(undefined); setIsModalOpen(true); setShowMobileMenu(false); }}
-                className="w-full flex items-center justify-center gap-1.5 bg-slate-950 text-white font-semibold text-xs py-2 rounded-lg transition"
+                className="w-full flex items-center justify-center gap-1.5 bg-slate-950 text-white font-semibold text-xs py-2.5 rounded-xl transition"
               >
                 <Plus className="w-3.5 h-3.5" /> New Tracker
               </button>
@@ -439,11 +678,18 @@ export default function App() {
       {/* Footer */}
       <footer className="bg-white border-t border-slate-100 py-6 text-center text-xs text-slate-400 mt-auto">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p>© 2026 AAD Tracker (Beta Release)</p>
-          <div className="flex gap-4">
-            <span className="font-mono text-slate-500 font-medium">
-              Guest / Local Storage Mode
-            </span>
+          <p>© 2026 MaxMyVacay / AAD Tracker</p>
+          <div className="flex items-center gap-2">
+            {user ? (
+              <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-150">
+                <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Google Profile Cloud Sync Active ({user.email})</span>
+              </span>
+            ) : (
+              <span className="font-mono text-slate-500 font-medium">
+                Guest Mode (Sign in with Google to enable Cloud Profile persistence)
+              </span>
+            )}
           </div>
         </div>
       </footer>
