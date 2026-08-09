@@ -155,9 +155,9 @@ For each requirement, determine:
 
 Return the response strictly as valid JSON matching the requested schema.`;
 
-    console.log('[AI Solver] Prompting Gemini model gemini-3.5-flash...');
+    console.log('[AI Solver] Prompting Gemini model gemini-2.5-flash...');
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: textToAnalyze,
       config: {
         systemInstruction,

@@ -7,53 +7,64 @@ async function fetchUrlContent(url) {
     'Accept-Language': 'en-US,en;q=0.9',
   };
 
-  // Strategy 1: Jina AI Reader (JS-rendering anti-bot reader for bank links)
+  // Strategy 1: Jina AI Reader (Fast 3.5s timeout)
   try {
     const res = await fetch(`https://r.jina.ai/${url}`, {
+      signal: AbortSignal.timeout(3500),
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/json'
+        'Accept': 'text/plain,text/html,application/json'
       }
+    });
+    if (res.ok) {
+      const text = await res.text();
+      if (text && text.length > 200 && !text.includes('Target URL returned 403') && !text.includes('Access Denied')) {
+        return text;
+      }
+    }
+  } catch (e) {
+    console.warn('Jina AI reader failed:', e.message);
+  }
+
+  // Strategy 2: Direct fetch (3s timeout)
+  try {
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(3000),
+      headers: fetchHeaders,
+      redirect: 'follow'
     });
     if (res.ok) {
       const text = await res.text();
       if (text && text.length > 200) return text;
     }
   } catch (e) {
-    console.warn('Jina AI reader failed:', e);
+    console.warn('Direct fetch failed:', e.message);
   }
 
-  // Strategy 2: Direct fetch
+  // Strategy 3: AllOrigins proxy (2.5s timeout)
   try {
-    const res = await fetch(url, { headers: fetchHeaders, redirect: 'follow' });
+    const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, {
+      signal: AbortSignal.timeout(2500)
+    });
     if (res.ok) {
       const text = await res.text();
       if (text && text.length > 200) return text;
     }
   } catch (e) {
-    console.warn('Direct fetch failed:', e);
+    console.warn('AllOrigins proxy failed:', e.message);
   }
 
-  // Strategy 3: AllOrigins proxy
+  // Strategy 4: CorsProxy (2.5s timeout)
   try {
-    const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
+    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, {
+      signal: AbortSignal.timeout(2500)
+    });
     if (res.ok) {
       const text = await res.text();
       if (text && text.length > 200) return text;
     }
   } catch (e) {
-    console.warn('AllOrigins proxy failed:', e);
-  }
-
-  // Strategy 4: CorsProxy
-  try {
-    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
-    if (res.ok) {
-      const text = await res.text();
-      if (text && text.length > 200) return text;
-    }
-  } catch (e) {
-    console.warn('CorsProxy failed:', e);
+    console.warn('CorsProxy failed:', e.message);
   }
 
   return null;
@@ -137,7 +148,7 @@ For each requirement, determine:
 Return the response strictly as valid JSON matching the requested schema.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: textToAnalyze,
       config: {
         systemInstruction,
