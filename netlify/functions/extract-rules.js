@@ -7,7 +7,23 @@ async function fetchUrlContent(url) {
     'Accept-Language': 'en-US,en;q=0.9',
   };
 
-  // Strategy 1: Direct fetch
+  // Strategy 1: Jina AI Reader (JS-rendering anti-bot reader for bank links)
+  try {
+    const res = await fetch(`https://r.jina.ai/${url}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/json'
+      }
+    });
+    if (res.ok) {
+      const text = await res.text();
+      if (text && text.length > 200) return text;
+    }
+  } catch (e) {
+    console.warn('Jina AI reader failed:', e);
+  }
+
+  // Strategy 2: Direct fetch
   try {
     const res = await fetch(url, { headers: fetchHeaders, redirect: 'follow' });
     if (res.ok) {
@@ -18,7 +34,7 @@ async function fetchUrlContent(url) {
     console.warn('Direct fetch failed:', e);
   }
 
-  // Strategy 2: AllOrigins proxy
+  // Strategy 3: AllOrigins proxy
   try {
     const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
     if (res.ok) {
@@ -29,7 +45,7 @@ async function fetchUrlContent(url) {
     console.warn('AllOrigins proxy failed:', e);
   }
 
-  // Strategy 3: CorsProxy
+  // Strategy 4: CorsProxy
   try {
     const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
     if (res.ok) {

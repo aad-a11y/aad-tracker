@@ -29,21 +29,39 @@ app.post('/api/extract-rules', async (req, res) => {
       console.log(`[AI Solver] Attempting to fetch URL: ${url}`);
       let html = '';
 
-      // Strategy 1: Direct fetch with browser User-Agent
+      // Strategy 1: Jina AI Reader (JS-rendering anti-bot reader for bank links)
       try {
-        const response = await fetch(url, {
+        console.log(`[AI Solver] Trying Jina AI Reader for ${url}...`);
+        const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-          },
-          redirect: 'follow',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/json'
+          }
         });
-        if (response.ok) {
-          html = await response.text();
+        if (jinaRes.ok) {
+          html = await jinaRes.text();
         }
-      } catch (directErr: any) {
-        console.warn(`[AI Solver] Direct fetch failed for ${url}:`, directErr.message);
+      } catch (jErr: any) {
+        console.warn(`[AI Solver] Jina AI Reader failed:`, jErr.message);
+      }
+
+      // Strategy 2: Direct fetch with browser User-Agent
+      if (!html || html.length < 200) {
+        try {
+          const response = await fetch(url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
+            redirect: 'follow',
+          });
+          if (response.ok) {
+            html = await response.text();
+          }
+        } catch (directErr: any) {
+          console.warn(`[AI Solver] Direct fetch failed for ${url}:`, directErr.message);
+        }
       }
 
       // Strategy 2: Proxy via allorigins if direct fetch returned empty/non-200
